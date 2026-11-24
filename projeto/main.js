@@ -24,6 +24,358 @@ document.body.style.overflow = "hidden";
 document.body.appendChild(renderer.domElement);
 
 // ---------------------------------------------------------------
+// Modos de diagnóstico do pipeline de visualização
+// ---------------------------------------------------------------
+let diagnosticMode = "none";
+const originalWireframeStates = new Map();
+
+// Cena auxiliar para a visualização superior do Frustum Culling.
+const frustumScene = new THREE.Scene();
+frustumScene.background = new THREE.Color(0x101820);
+
+// Câmera ortográfica posicionada acima do cenário.
+const frustumViewCamera = new THREE.OrthographicCamera(
+  -55,
+  55,
+  55,
+  -55,
+  0.1,
+  300,
+);
+
+frustumViewCamera.position.set(0, 130, 0);
+frustumViewCamera.up.set(0, 0, -1);
+frustumViewCamera.lookAt(0, 0, 0);
+
+// Objetos utilizados no cálculo do Frustum Culling.
+const cameraFrustum = new THREE.Frustum();
+const frustumProjectionView = new THREE.Matrix4();
+
+const treeBounds = [];
+
+const insideFrustumColor = 0x35e06f;
+const outsideFrustumColor = 0xff5252;
+
+// Marcadores das árvores na visualização superior.
+const treeMarkerGeometry = new THREE.PlaneGeometry(0.9, 0.9);
+const treeMarkerMaterials = {
+  inside: new THREE.MeshBasicMaterial({
+    color: insideFrustumColor,
+    side: THREE.DoubleSide,
+    depthTest: false,
+  }),
+  outside: new THREE.MeshBasicMaterial({
+    color: outsideFrustumColor,
+    side: THREE.DoubleSide,
+    depthTest: false,
+  }),
+};
+
+// Grupo que contém os marcadores das árvores.
+const treeMarkers = new THREE.Group();
+frustumScene.add(treeMarkers);
+
+// Representação do limite do cenário.
+const mapBorderPoints = [
+  new THREE.Vector3(-50, 0, -50),
+  new THREE.Vector3(50, 0, -50),
+  new THREE.Vector3(50, 0, 50),
+  new THREE.Vector3(-50, 0, 50),
+];
+
+const mapBorderGeometry = new THREE.BufferGeometry().setFromPoints(
+  mapBorderPoints,
+);
+const mapBorder = new THREE.LineLoop(
+  mapBorderGeometry,
+  new THREE.LineBasicMaterial({
+    color: 0x64748b,
+    depthTest: false,
+  }),
+);
+mapBorder.position.y = 0.05;
+frustumScene.add(mapBorder);
+
+// Grade de referência do mapa.
+const gridPoints = [];
+
+for (let i = -50; i <= 50; i += 10) {
+  gridPoints.push(
+    new THREE.Vector3(i, 0, -50),
+    new THREE.Vector3(i, 0, 50),
+    new THREE.Vector3(-50, 0, i),
+    new THREE.Vector3(50, 0, i),
+  );
+}
+
+const gridGeometry = new THREE.BufferGeometry().setFromPoints(gridPoints);
+const grid = new THREE.LineSegments(
+  gridGeometry,
+  new THREE.LineBasicMaterial({
+    color: 0x263442,
+    transparent: true,
+    opacity: 0.7,
+    depthTest: false,
+  }),
+);
+grid.position.y = 0.02;
+frustumScene.add(grid);
+
+// Linhas que representam a projeção horizontal do frustum.
+const frustumLineMaterial = new THREE.LineBasicMaterial({
+  color: 0xffd166,
+  depthTest: false,
+  depthWrite: false,
+});
+
+const frustumFootprintGeometry = new THREE.BufferGeometry();
+const frustumFootprint = new THREE.LineSegments(
+  frustumFootprintGeometry,
+  frustumLineMaterial,
+);
+frustumFootprint.renderOrder = 10;
+frustumScene.add(frustumFootprint);
+
+// Marcador da posição da câmera principal.
+const cameraMarker = new THREE.Mesh(
+  new THREE.CircleGeometry(1.2, 16),
+  new THREE.MeshBasicMaterial({
+    color: 0x00d4ff,
+    side: THREE.DoubleSide,
+    depthTest: false,
+  }),
+);
+cameraMarker.rotation.x = -Math.PI / 2;
+cameraMarker.position.y = 0.2;
+cameraMarker.renderOrder = 11;
+frustumScene.add(cameraMarker);
+
+// Indicador da direção da câmera.
+const cameraDirectionGeometry = new THREE.BufferGeometry();
+const cameraDirectionLine = new THREE.Line(
+  cameraDirectionGeometry,
+  new THREE.LineBasicMaterial({
+    color: 0x00d4ff,
+    depthTest: false,
+  }),
+);
+cameraDirectionLine.renderOrder = 11;
+frustumScene.add(cameraDirectionLine);
+
+// Contador de objetos classificados pelo Frustum Culling.
+const frustumStats = document.createElement("div");
+frustumStats.style.cssText =
+  "position:fixed;right:20px;top:282px;padding:8px 12px;" +
+  "background:rgba(0,0,0,0.8);color:#fff;font:12px monospace;" +
+  "line-height:1.7;border-radius:5px;pointer-events:none;" +
+  "z-index:10;display:none;";
+document.body.appendChild(frustumStats);
+
+// Identificação visual do modo de diagnóstico ativo.
+const diagnosticInfo = document.createElement("div");
+diagnosticInfo.textContent = "Diagnóstico: desativado";
+diagnosticInfo.style.cssText =
+  "position:fixed;left:12px;top:12px;padding:8px 12px;" +
+  "background:rgba(0,0,0,0.7);color:#fff;font:13px sans-serif;" +
+  "border-radius:6px;pointer-events:none;z-index:10;display:none;";
+document.body.appendChild(diagnosticInfo);
+
+const frustumLabel = document.createElement("div");
+frustumLabel.textContent = "Frustum Culling - vista superior";
+frustumLabel.style.cssText =
+  "position:fixed;right:20px;top:20px;padding:6px 9px;" +
+  "background:rgba(0,0,0,0.75);color:#fff;font:12px sans-serif;" +
+  "pointer-events:none;z-index:10;display:none;";
+document.body.appendChild(frustumLabel);
+
+// Shader de profundidade linearizada. A faixa exibida é de 0 a 45 unidades;
+// objetos mais próximos ficam claros e os mais distantes ficam escuros.
+// O cálculo considera também as matrizes de instanciamento das árvores.
+const depthMaterial = new THREE.ShaderMaterial({
+  uniforms: {
+    nearPlane: { value: camera.near },
+    displayFar: { value: 45.0 },
+  },
+  vertexShader: `
+    varying float vViewDepth;
+
+    void main() {
+      vec4 localPosition = vec4(position, 1.0);
+
+      #ifdef USE_INSTANCING
+        localPosition = instanceMatrix * localPosition;
+      #endif
+
+      vec4 viewPosition = viewMatrix * modelMatrix * localPosition;
+      vViewDepth = -viewPosition.z;
+      gl_Position = projectionMatrix * viewPosition;
+    }
+  `,
+  fragmentShader: `
+    uniform float nearPlane;
+    uniform float displayFar;
+    varying float vViewDepth;
+
+    void main() {
+      float linearDepth = clamp(
+        (vViewDepth - nearPlane) / (displayFar - nearPlane),
+        0.0,
+        1.0
+      );
+
+      float depthValue = 1.0 - linearDepth;
+      gl_FragColor = vec4(vec3(depthValue), 1.0);
+    }
+  `,
+  depthTest: true,
+  depthWrite: true,
+  side: THREE.DoubleSide,
+});
+
+function restoreWireframe() {
+  originalWireframeStates.forEach((wireframe, material) => {
+    material.wireframe = wireframe;
+  });
+  originalWireframeStates.clear();
+}
+
+function setDiagnosticMode(mode) {
+  if (diagnosticMode === "wireframe") restoreWireframe();
+
+  diagnosticMode = diagnosticMode === mode ? "none" : mode;
+  scene.overrideMaterial = diagnosticMode === "depth" ? depthMaterial : null;
+
+  diagnosticInfo.style.display = diagnosticMode === "none" ? "none" : "block";
+  frustumLabel.style.display = diagnosticMode === "frustum" ? "block" : "none";
+  frustumStats.style.display = diagnosticMode === "frustum" ? "block" : "none";
+
+  if (diagnosticMode === "wireframe") {
+    scene.traverse((object) => {
+      if (!object.isMesh) return;
+
+      const materials = Array.isArray(object.material)
+        ? object.material
+        : [object.material];
+
+      materials.forEach((material) => {
+        if (!material) return;
+        if (!originalWireframeStates.has(material)) {
+          originalWireframeStates.set(material, material.wireframe);
+        }
+        material.wireframe = true;
+      });
+    });
+  }
+
+  const labels = {
+    none: "desativado",
+    frustum: "Frustum Culling",
+    wireframe: "Wireframe",
+    depth: "Z-buffer (profundidade linear, 0–45 unidades)",
+  };
+
+  diagnosticInfo.textContent = `Diagnóstico: ${labels[diagnosticMode]} | F1: Frustum | F2: Wireframe | F3: Z-buffer`;
+}
+
+// Atualiza o frustum da câmera e classifica as árvores.
+function updateFrustumView() {
+  camera.updateMatrixWorld(true);
+
+  // Matriz que combina a projeção e a transformação da câmera.
+  frustumProjectionView.multiplyMatrices(
+    camera.projectionMatrix,
+    camera.matrixWorldInverse,
+  );
+
+  // Atualiza os seis planos do frustum.
+  cameraFrustum.setFromProjectionMatrix(frustumProjectionView);
+
+  let insideCount = 0;
+  let outsideCount = 0;
+
+  // Verifica individualmente o volume delimitador de cada árvore.
+  treeBounds.forEach((tree) => {
+    const isInside = cameraFrustum.intersectsBox(tree.box);
+
+    tree.marker.material = isInside
+      ? treeMarkerMaterials.inside
+      : treeMarkerMaterials.outside;
+
+    if (isInside) {
+      insideCount++;
+    } else {
+      outsideCount++;
+    }
+  });
+
+  // Atualiza o contador apresentado na interface.
+  frustumStats.innerHTML =
+    `<span style="color:#35e06f">■ Dentro do frustum: ${insideCount}</span><br>` +
+    `<span style="color:#ff5252">■ Fora do frustum: ${outsideCount}</span><br>` +
+    `<span style="color:#ffffff">Total de árvores: ${treeBounds.length}</span>`;
+
+  // Atualiza a posição do marcador da câmera.
+  cameraMarker.position.set(camera.position.x, 0.2, camera.position.z);
+
+  // Atualiza a direção horizontal da câmera.
+  const direction = new THREE.Vector3();
+  camera.getWorldDirection(direction);
+  direction.y = 0;
+  direction.normalize();
+
+  const directionEnd = new THREE.Vector3(
+    camera.position.x + direction.x * 8,
+    0.2,
+    camera.position.z + direction.z * 8,
+  );
+
+  cameraDirectionGeometry.setFromPoints([
+    new THREE.Vector3(camera.position.x, 0.2, camera.position.z),
+    directionEnd,
+  ]);
+
+  cameraDirectionGeometry.attributes.position.needsUpdate = true;
+
+  // Calcula os quatro cantos do plano distante do frustum.
+  // A projeção no mapa superior representa o campo de visão horizontal.
+  const farCorners = [
+    new THREE.Vector3(-1, -1, 1).unproject(camera),
+    new THREE.Vector3(1, -1, 1).unproject(camera),
+    new THREE.Vector3(1, 1, 1).unproject(camera),
+    new THREE.Vector3(-1, 1, 1).unproject(camera),
+  ];
+
+  const cameraGround = new THREE.Vector3(
+    camera.position.x,
+    0.15,
+    camera.position.z,
+  );
+
+  const footprintPoints = [];
+
+  // Linhas entre a posição da câmera e os quatro cantos distantes.
+  farCorners.forEach((corner) => {
+    const projectedCorner = new THREE.Vector3(corner.x, 0.15, corner.z);
+
+    footprintPoints.push(cameraGround.clone(), projectedCorner);
+  });
+
+  // Fecha o contorno do plano distante.
+  for (let i = 0; i < farCorners.length; i++) {
+    const current = farCorners[i];
+    const next = farCorners[(i + 1) % farCorners.length];
+
+    footprintPoints.push(
+      new THREE.Vector3(current.x, 0.15, current.z),
+      new THREE.Vector3(next.x, 0.15, next.z),
+    );
+  }
+
+  frustumFootprintGeometry.setFromPoints(footprintPoints);
+  frustumFootprintGeometry.attributes.position.needsUpdate = true;
+}
+
+// ---------------------------------------------------------------
 // Iluminação global
 // ---------------------------------------------------------------
 scene.add(new THREE.HemisphereLight(0x506080, 0x17130e, 1.0));
@@ -208,6 +560,32 @@ for (let i = -46; i <= 46; i += 4) {
   addTree(47, i, 1.4);
 }
 
+// Cria os volumes delimitadores e os marcadores de cada árvore.
+treeData.forEach((tree) => {
+  const extent = 1.5 * tree.scale;
+
+  const box = new THREE.Box3(
+    new THREE.Vector3(tree.x - extent, 0, tree.z - extent),
+    new THREE.Vector3(tree.x + extent, 6.3 * tree.scale, tree.z + extent),
+  );
+
+  const marker = new THREE.Mesh(
+    treeMarkerGeometry,
+    treeMarkerMaterials.outside,
+  );
+
+  marker.rotation.x = -Math.PI / 2;
+  marker.position.set(tree.x, 0.12, tree.z);
+  marker.renderOrder = 5;
+
+  treeMarkers.add(marker);
+
+  treeBounds.push({
+    box,
+    marker,
+  });
+});
+
 const trunkGeo = new THREE.CylinderGeometry(0.22, 0.38, 2.5, 5);
 const trunks = new THREE.InstancedMesh(trunkGeo, treeTrunkMat, treeData.length);
 trunks.castShadow = true;
@@ -389,6 +767,17 @@ const keys = {};
 
 window.addEventListener("keydown", (event) => {
   keys[event.code] = true;
+
+  if (!event.repeat && event.code === "F1") {
+    event.preventDefault();
+    setDiagnosticMode("frustum");
+  } else if (!event.repeat && event.code === "F2") {
+    event.preventDefault();
+    setDiagnosticMode("wireframe");
+  } else if (!event.repeat && event.code === "F3") {
+    event.preventDefault();
+    setDiagnosticMode("depth");
+  }
 
   if (event.code === "KeyF" && !event.repeat) {
     lanternLight.visible = !lanternLight.visible;
@@ -649,7 +1038,38 @@ function animate() {
   flame.rotation.y = Math.sin(elapsed * 3) * 0.15;
   fireLight.intensity = 8 * flicker;
 
+  // Renderização principal.
   renderer.render(scene, camera);
+
+  // Renderiza o mapa superior do Frustum Culling.
+  if (diagnosticMode === "frustum") {
+    updateFrustumView();
+
+    const insetWidth = Math.min(440, Math.floor(window.innerWidth * 0.45));
+    const insetHeight = Math.min(360, Math.floor(window.innerHeight * 0.45));
+    const insetX = window.innerWidth - insetWidth - 12;
+    const insetY = window.innerHeight - insetHeight - 12;
+
+    renderer.clearDepth();
+    renderer.setScissorTest(true);
+    renderer.setViewport(insetX, insetY, insetWidth, insetHeight);
+    renderer.setScissor(insetX, insetY, insetWidth, insetHeight);
+
+    // Ajusta o enquadramento superior para manter o mapa quadrado.
+    const aspect = insetWidth / insetHeight;
+    const viewSize = 55;
+
+    frustumViewCamera.left = -viewSize * aspect;
+    frustumViewCamera.right = viewSize * aspect;
+    frustumViewCamera.top = viewSize;
+    frustumViewCamera.bottom = -viewSize;
+    frustumViewCamera.updateProjectionMatrix();
+
+    renderer.render(frustumScene, frustumViewCamera);
+
+    renderer.setScissorTest(false);
+    renderer.setViewport(0, 0, window.innerWidth, window.innerHeight);
+  }
 }
 
 window.addEventListener("resize", () => {
