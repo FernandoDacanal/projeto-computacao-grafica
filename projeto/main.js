@@ -1,5 +1,8 @@
 import * as THREE from "three";
 import { EXRLoader } from "three/addons/loaders/EXRLoader.js";
+import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
+import { FBXLoader } from "three/addons/loaders/FBXLoader.js";
+import { OBJLoader } from "three/addons/loaders/OBJLoader.js";
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x080e16);
@@ -400,6 +403,190 @@ const moonOffset = new THREE.Vector3(-10, 20, 5);
 // ---------------------------------------------------------------
 const textureLoader = new THREE.TextureLoader();
 const exrLoader = new EXRLoader();
+const gltfLoader = new GLTFLoader();
+const fbxLoader = new FBXLoader();
+const objLoader = new OBJLoader();
+
+// ---------------------------------------------------------------
+// Modelos 3D externos (formato GLB)
+// ---------------------------------------------------------------
+// Os modelos são carregados de forma assíncrona e adicionados à cena
+// assim que cada arquivo termina de carregar.
+function loadGLBModel(path, options) {
+  gltfLoader.load(
+    path,
+    (gltf) => {
+      const model = gltf.scene;
+
+      model.position.set(options.x, options.y ?? 0, options.z);
+      model.rotation.y = options.rotationY ?? 0;
+      model.scale.setScalar(options.scale);
+
+      // Habilita sombras e ajusta os materiais do modelo.
+      model.traverse((object) => {
+        if (!object.isMesh) return;
+
+        object.castShadow = true;
+        object.receiveShadow = true;
+
+        const materials = Array.isArray(object.material)
+          ? object.material
+          : [object.material];
+
+        materials.forEach((material) => {
+          if (!material) return;
+
+          material.color.set(0xffffff);
+          material.metalness = 0;
+          material.needsUpdate = true;
+        });
+      });
+
+      scene.add(model);
+
+      // Adiciona uma colisão circular aproximada para evitar que o
+      // jogador atravesse os modelos maiores do cenário.
+      if (options.colliderRadius) {
+        colliders.push({
+          x: options.x,
+          z: options.z,
+          radius: options.colliderRadius,
+          camRadius: options.colliderRadius,
+          top: options.colliderTop ?? 3,
+        });
+      }
+
+      console.log(`[MODELO GLB CARREGADO] ${path}`);
+    },
+    undefined,
+    (error) => {
+      console.error(`[ERRO AO CARREGAR MODELO GLB] ${path}`, error);
+    },
+  );
+}
+
+// Pinguim: carregado no formato FBX.
+function loadFBXModel(path, options) {
+  fbxLoader.load(
+    path,
+    (model) => {
+      model.position.set(options.x, options.y ?? 0, options.z);
+      model.rotation.y = options.rotationY ?? 0;
+      model.scale.setScalar(options.scale);
+
+      // Habilita sombras em todas as malhas do modelo.
+      model.traverse((object) => {
+        if (!object.isMesh) return;
+
+        object.castShadow = true;
+        object.receiveShadow = true;
+      });
+
+      scene.add(model);
+
+      // Adiciona uma colisão circular aproximada para evitar que o
+      // jogador atravesse os modelos maiores do cenário.
+      if (options.colliderRadius) {
+        colliders.push({
+          x: options.x,
+          z: options.z,
+          radius: options.colliderRadius,
+          camRadius: options.colliderRadius,
+          top: options.colliderTop ?? 3,
+        });
+      }
+
+      console.log(`[MODELO FBX CARREGADO] ${path}`);
+    },
+    undefined,
+    (error) => {
+      console.error(`[ERRO AO CARREGAR MODELO FBX] ${path}`, error);
+    },
+  );
+}
+
+// Cervo: carregado no formato OBJ.
+function loadOBJModel(path, options) {
+  objLoader.load(
+    path,
+    (model) => {
+      model.position.set(options.x, options.y ?? 0, options.z);
+      model.rotation.y = options.rotationY ?? 0;
+      model.scale.setScalar(options.scale);
+
+      // Habilita sombras em todas as malhas do modelo.
+      model.traverse((object) => {
+        if (!object.isMesh) return;
+
+        object.castShadow = true;
+        object.receiveShadow = true;
+      });
+
+      scene.add(model);
+
+      // Adiciona uma colisão circular aproximada para evitar que o
+      // jogador atravesse os modelos maiores do cenário.
+      if (options.colliderRadius) {
+        colliders.push({
+          x: options.x,
+          z: options.z,
+          radius: options.colliderRadius,
+          camRadius: options.colliderRadius,
+          top: options.colliderTop ?? 3,
+        });
+      }
+
+      console.log(`[MODELO OBJ CARREGADO] ${path}`);
+    },
+    undefined,
+    (error) => {
+      console.error(`[ERRO AO CARREGAR MODELO OBJ] ${path}`, error);
+    },
+  );
+}
+
+// Barraca: posicionada a noroeste da fogueira.
+// O arquivo possui dimensões originais maiores que os demais modelos,
+// por isso recebe uma escala reduzida.
+loadGLBModel("/models/Tent.glb", {
+  x: -9,
+  z: -5,
+  scale: 0.22,
+  rotationY: Math.PI / 2,
+  colliderRadius: 2.7,
+  colliderTop: 2.5,
+});
+
+// Carrinho de golfe: estacionado a nordeste do acampamento.
+loadGLBModel("/models/Golf.glb", {
+  x: 9,
+  y: 0.86,
+  z: -8,
+  scale: 1,
+  rotationY: -Math.PI / 4,
+  colliderRadius: 1.6,
+  colliderTop: 2,
+});
+
+// Pinguim: elemento decorativo próximo à fogueira.
+loadFBXModel("/models/Pinguin.fbx", {
+  x: -2,
+  z: 2,
+  scale: 0.8,
+  rotationY: Math.PI / 1.35,
+  colliderRadius: 0.55,
+  colliderTop: 1.5,
+});
+
+// Cervo: animal posicionado na borda da clareira.
+loadOBJModel("/models/Deer.obj", {
+  x: 11,
+  z: 6,
+  scale: 1,
+  rotationY: -Math.PI / 3,
+  colliderRadius: 0.9,
+  colliderTop: 2.2,
+});
 
 // Configura repetição e filtragem das texturas.
 function configureTexture(texture, repeatX = 1, repeatY = 1) {
