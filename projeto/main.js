@@ -1,4 +1,5 @@
-import * as THREE from 'three';
+import * as THREE from "three";
+import { EXRLoader } from "three/addons/loaders/EXRLoader.js";
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x080e16);
@@ -8,7 +9,7 @@ const camera = new THREE.PerspectiveCamera(
   65,
   window.innerWidth / window.innerHeight,
   0.1,
-  150
+  150,
 );
 
 const renderer = new THREE.WebGLRenderer({ antialias: false });
@@ -18,8 +19,8 @@ renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.BasicShadowMap;
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.NoToneMapping;
-document.body.style.margin = '0';
-document.body.style.overflow = 'hidden';
+document.body.style.margin = "0";
+document.body.style.overflow = "hidden";
 document.body.appendChild(renderer.domElement);
 
 // ---------------------------------------------------------------
@@ -43,21 +44,113 @@ scene.add(moon.target);
 const moonOffset = new THREE.Vector3(-10, 20, 5);
 
 // ---------------------------------------------------------------
+// Carregamento de texturas
+// ---------------------------------------------------------------
+const textureLoader = new THREE.TextureLoader();
+const exrLoader = new EXRLoader();
+
+// Configura repetição e filtragem das texturas.
+function configureTexture(texture, repeatX = 1, repeatY = 1) {
+  texture.wrapS = THREE.RepeatWrapping;
+  texture.wrapT = THREE.RepeatWrapping;
+  texture.repeat.set(repeatX, repeatY);
+  texture.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy());
+
+  return texture;
+}
+
+// Carrega texturas convencionais (JPG e PNG).
+function loadTexture(path, colorSpace, repeatX = 1, repeatY = 1) {
+  const texture = textureLoader.load(
+    path,
+    () => console.log(`[TEXTURA CARREGADA] ${path}`),
+    undefined,
+    (error) => console.error(`[ERRO AO CARREGAR] ${path}`, error),
+  );
+
+  texture.colorSpace = colorSpace;
+
+  return configureTexture(texture, repeatX, repeatY);
+}
+
+// Carrega mapas EXR utilizados como dados (Normal e Roughness).
+function loadEXRTexture(path, repeatX = 1, repeatY = 1) {
+  const texture = exrLoader.load(
+    path,
+    () => console.log(`[TEXTURA EXR CARREGADA] ${path}`),
+    undefined,
+    (error) => console.error(`[ERRO AO CARREGAR EXR] ${path}`, error),
+  );
+
+  texture.colorSpace = THREE.NoColorSpace;
+
+  return configureTexture(texture, repeatX, repeatY);
+}
+
+// ---------------------------------------------------------------
+// Texturas do terreno
+// ---------------------------------------------------------------
+const grassTextures = {
+  map: loadTexture("/textures/grass/diffuse.jpg", THREE.SRGBColorSpace, 12, 12),
+
+  normalMap: loadEXRTexture("/textures/grass/normal.exr", 12, 12),
+
+  roughnessMap: loadEXRTexture("/textures/grass/roughness.exr", 12, 12),
+};
+
+// ---------------------------------------------------------------
+// Texturas das árvores
+// ---------------------------------------------------------------
+const barkTextures = {
+  map: loadTexture("/textures/bark/diffuse.jpg", THREE.SRGBColorSpace),
+
+  normalMap: loadEXRTexture("/textures/bark/normal.exr"),
+
+  roughnessMap: loadTexture("/textures/bark/roughness.jpg", THREE.NoColorSpace),
+};
+
+// ---------------------------------------------------------------
+// Texturas do lampião
+// ---------------------------------------------------------------
+const metalTextures = {
+  map: loadTexture("/textures/metal/diffuse.jpg", THREE.SRGBColorSpace),
+
+  normalMap: loadEXRTexture("/textures/metal/normal.exr"),
+
+  roughnessMap: loadTexture(
+    "/textures/metal/roughness.jpg",
+    THREE.NoColorSpace,
+  ),
+};
+
+// ---------------------------------------------------------------
 // Materiais
 // ---------------------------------------------------------------
 const groundMat = new THREE.MeshStandardMaterial({
-  color: 0x263b28,
-  roughness: 1
+  ...grassTextures,
+  color: 0xffffff,
+  roughness: 1.0,
+  metalness: 0.0,
+  normalScale: new THREE.Vector2(0.5, 0.5),
 });
 
 const trunkMat = new THREE.MeshStandardMaterial({
   color: 0x493021,
-  flatShading: true
+  flatShading: true,
+});
+
+const treeTrunkMat = new THREE.MeshStandardMaterial({
+  ...barkTextures,
+  color: 0xffffff,
+  roughness: 1.0,
+  metalness: 0.0,
+  flatShading: true,
+  normalScale: new THREE.Vector2(0.6, 0.6),
 });
 
 const leavesMat = new THREE.MeshStandardMaterial({
   color: 0x142b20,
-  flatShading: true
+  flatShading: true,
 });
 
 // ---------------------------------------------------------------
@@ -65,7 +158,7 @@ const leavesMat = new THREE.MeshStandardMaterial({
 // ---------------------------------------------------------------
 const ground = new THREE.Mesh(
   new THREE.PlaneGeometry(100, 100, 20, 20),
-  groundMat
+  groundMat,
 );
 
 ground.rotation.x = -Math.PI / 2;
@@ -93,7 +186,7 @@ function addTree(x, z, scale = 1) {
     z,
     radius: 0.65 * scale,
     camRadius: 1.3 * scale,
-    top: 6.3 * scale
+    top: 6.3 * scale,
   });
 }
 
@@ -116,7 +209,7 @@ for (let i = -46; i <= 46; i += 4) {
 }
 
 const trunkGeo = new THREE.CylinderGeometry(0.22, 0.38, 2.5, 5);
-const trunks = new THREE.InstancedMesh(trunkGeo, trunkMat, treeData.length);
+const trunks = new THREE.InstancedMesh(trunkGeo, treeTrunkMat, treeData.length);
 trunks.castShadow = true;
 trunks.frustumCulled = false;
 
@@ -159,13 +252,13 @@ const fireGroup = new THREE.Group();
 scene.add(fireGroup);
 
 const woodMat = new THREE.MeshStandardMaterial({
-  color: 0x533323
+  color: 0x533323,
 });
 
 for (let i = 0; i < 4; i++) {
   const log = new THREE.Mesh(
     new THREE.CylinderGeometry(0.22, 0.22, 2.2, 6),
-    woodMat
+    woodMat,
   );
 
   log.rotation.z = Math.PI / 2;
@@ -199,7 +292,7 @@ for (let i = 0; i < 4; i++) {
 
   const log = new THREE.Mesh(
     new THREE.CylinderGeometry(0.3, 0.36, 2.2, 6),
-    trunkMat
+    trunkMat,
   );
 
   const cx = Math.cos(angle) * 4;
@@ -224,7 +317,7 @@ for (let i = 0; i < 4; i++) {
       z: cz + tz * off,
       radius: 0.4,
       camRadius: 0.45,
-      top: 0.8
+      top: 0.8,
     });
   }
 }
@@ -237,7 +330,7 @@ scene.add(player);
 
 const bodyMat = new THREE.MeshStandardMaterial({
   color: 0x536b79,
-  flatShading: true
+  flatShading: true,
 });
 
 const body = new THREE.Mesh(new THREE.BoxGeometry(0.8, 1.2, 0.5), bodyMat);
@@ -247,7 +340,7 @@ player.add(body);
 
 const head = new THREE.Mesh(
   new THREE.IcosahedronGeometry(0.38, 0),
-  new THREE.MeshStandardMaterial({ color: 0xbba18a })
+  new THREE.MeshStandardMaterial({ color: 0xbba18a }),
 );
 head.position.y = 2.1;
 head.castShadow = true;
@@ -265,16 +358,18 @@ player.add(lantern);
 const lanternBody = new THREE.Mesh(
   new THREE.BoxGeometry(0.32, 0.42, 0.32),
   new THREE.MeshStandardMaterial({
-    color: 0x493c2b,
-    metalness: 0.5,
-    roughness: 0.6
-  })
+    ...metalTextures,
+    color: 0xffffff,
+    metalness: 0.15,
+    roughness: 0.75,
+    normalScale: new THREE.Vector2(0.4, 0.4),
+  }),
 );
 lantern.add(lanternBody);
 
 const lanternGlass = new THREE.Mesh(
   new THREE.OctahedronGeometry(0.16, 0),
-  new THREE.MeshBasicMaterial({ color: 0xffd47a })
+  new THREE.MeshBasicMaterial({ color: 0xffd47a }),
 );
 lanternGlass.position.y = -0.03;
 lantern.add(lanternGlass);
@@ -292,18 +387,16 @@ player.rotation.y = Math.PI;
 // ---------------------------------------------------------------
 const keys = {};
 
-window.addEventListener('keydown', (event) => {
+window.addEventListener("keydown", (event) => {
   keys[event.code] = true;
 
-  if (event.code === 'KeyF' && !event.repeat) {
+  if (event.code === "KeyF" && !event.repeat) {
     lanternLight.visible = !lanternLight.visible;
-    lanternGlass.material.color.set(
-      lanternLight.visible ? 0xffd47a : 0x332b20
-    );
+    lanternGlass.material.color.set(lanternLight.visible ? 0xffd47a : 0x332b20);
   }
 });
 
-window.addEventListener('keyup', (event) => {
+window.addEventListener("keyup", (event) => {
   keys[event.code] = false;
 });
 
@@ -321,23 +414,24 @@ const maxPitch = 1.3;
 // câmera sem precisar ficar pressionado. ESC libera o cursor.
 const canvas = renderer.domElement;
 
-const hint = document.createElement('div');
-hint.textContent = 'Clique para controlar a câmera com o mouse (ESC para sair)';
+const hint = document.createElement("div");
+hint.textContent = "Clique para controlar a câmera com o mouse (ESC para sair)";
 hint.style.cssText =
-  'position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);' +
-  'padding:12px 20px;background:rgba(0,0,0,0.6);color:#fff;' +
-  'font:16px sans-serif;border-radius:8px;pointer-events:none;';
+  "position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);" +
+  "padding:12px 20px;background:rgba(0,0,0,0.6);color:#fff;" +
+  "font:16px sans-serif;border-radius:8px;pointer-events:none;";
 document.body.appendChild(hint);
 
-canvas.addEventListener('click', () => {
+canvas.addEventListener("click", () => {
   if (document.pointerLockElement !== canvas) canvas.requestPointerLock();
 });
 
-document.addEventListener('pointerlockchange', () => {
-  hint.style.display = document.pointerLockElement === canvas ? 'none' : 'block';
+document.addEventListener("pointerlockchange", () => {
+  hint.style.display =
+    document.pointerLockElement === canvas ? "none" : "block";
 });
 
-document.addEventListener('mousemove', (event) => {
+document.addEventListener("mousemove", (event) => {
   if (document.pointerLockElement !== canvas) return;
 
   cameraYaw -= event.movementX * mouseSensitivity;
@@ -345,16 +439,16 @@ document.addEventListener('mousemove', (event) => {
   cameraPitch = THREE.MathUtils.clamp(
     cameraPitch + event.movementY * mouseSensitivity,
     minPitch,
-    maxPitch
+    maxPitch,
   );
 });
 
 // Roda do mouse ajusta o zoom desejado
-window.addEventListener('wheel', (event) => {
+window.addEventListener("wheel", (event) => {
   preferredDistance = THREE.MathUtils.clamp(
     preferredDistance + Math.sign(event.deltaY) * 0.8,
     3,
-    14
+    14,
   );
 });
 
@@ -401,7 +495,7 @@ function updateCamera(delta, snap = false) {
   cameraTarget.set(
     player.position.x,
     player.position.y + 1.3,
-    player.position.z
+    player.position.z,
   );
 
   // Direção do alvo para a câmera (esférica: yaw + pitch)
@@ -409,7 +503,7 @@ function updateCamera(delta, snap = false) {
   camDir.set(
     -Math.sin(cameraYaw) * cosP,
     Math.sin(cameraPitch),
-    -Math.cos(cameraYaw) * cosP
+    -Math.cos(cameraYaw) * cosP,
   );
 
   // Vetor completo do alvo até a posição ideal
@@ -454,7 +548,7 @@ function updateCamera(delta, snap = false) {
       ? THREE.MathUtils.clamp(
           tMax * preferredDistance - cameraMargin,
           minCameraDistance,
-          preferredDistance
+          preferredDistance,
         )
       : preferredDistance;
 
@@ -463,7 +557,8 @@ function updateCamera(delta, snap = false) {
     currentDistance = allowed;
   } else {
     const rate = allowed < currentDistance ? 25 : 3;
-    currentDistance += (allowed - currentDistance) * (1 - Math.exp(-rate * delta));
+    currentDistance +=
+      (allowed - currentDistance) * (1 - Math.exp(-rate * delta));
   }
 
   camera.position.copy(cameraTarget).addScaledVector(camDir, currentDistance);
@@ -527,7 +622,7 @@ function animate() {
     // Menor diferença angular, evitando saltos ao cruzar ±PI
     const angleDifference = Math.atan2(
       Math.sin(targetAngle - player.rotation.y),
-      Math.cos(targetAngle - player.rotation.y)
+      Math.cos(targetAngle - player.rotation.y),
     );
 
     player.rotation.y += angleDifference * (1 - Math.exp(-12 * delta));
@@ -548,7 +643,7 @@ function animate() {
   flame.scale.set(
     0.9 + Math.sin(elapsed * 8) * 0.1,
     0.85 + Math.sin(elapsed * 11) * 0.15,
-    0.9 + Math.cos(elapsed * 7) * 0.1
+    0.9 + Math.cos(elapsed * 7) * 0.1,
   );
 
   flame.rotation.y = Math.sin(elapsed * 3) * 0.15;
@@ -557,7 +652,7 @@ function animate() {
   renderer.render(scene, camera);
 }
 
-window.addEventListener('resize', () => {
+window.addEventListener("resize", () => {
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(window.innerWidth, window.innerHeight);
